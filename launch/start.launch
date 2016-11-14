@@ -4,11 +4,12 @@
 
   <node pkg="ros_kinfu_solo" type="ros_kinfu_solo_node" name="$(arg name)" output="screen">
     <param name="prefix_topic" value="$(arg namespace)" />
-    <param name="camera_info_topic" value="$(arg namespace)/depth/camera_info" />
-    <param name="depth_image_topic" value="$(arg namespace)/depth/image_raw" />
-    <param name="image_topic" value="$(arg namespace)/rgb/image_raw" />
+    <param name="topic_camera_info" value="$(arg namespace)/depth/camera_info" />
+    <param name="topic_depth" value="$(arg namespace)/depth/image_raw" />
+    <param name="topic_image" value="$(arg namespace)/rgb/image_raw" />
+    <param name="topic_view" value="$(arg namespace)/kinfued_scene" />
 
-    <param name="depth_height" type="int" value="480" />
-    <param name="depth_width" type="int" value="640" />
+    <param name="height" type="int" value="480" />
+    <param name="width" type="int" value="640" />
   </node>
 </launch>
