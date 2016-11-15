@@ -9,6 +9,7 @@
 #include <sensor_msgs/CameraInfo.h>
 #include <sensor_msgs/fill_image.h>
 
+// from local source code
 #include <pcl/gpu/kinfu_large_scale/kinfu.h>
 
 namespace ns_kinfuls = pcl::gpu::kinfuLS;
@@ -25,45 +26,52 @@ private:
     boost::shared_ptr<ns_kinfuls::KinfuTracker> _kinfu;
     ns_kinfuls::KinfuTracker::DepthMap _depth_device;
     ns_kinfuls::KinfuTracker::View _color_device;
-    pcl::PointCloud<pcl::PointXYZI>::Ptr _tsdf_cloud_ptr;
     sensor_msgs::ImageConstPtr _depth_ptr;
     sensor_msgs::ImageConstPtr _color_ptr;
+    pcl::PointCloud<pcl::PointXYZI>::Ptr _tsdf_cloud_ptr;
 
     ros::Subscriber _sub_depth;
     ros::Subscriber _sub_color;
     std::string _topic_view; // empty if disable
 
+    /**
+     * @brief execute real part of processing
+     */
     void execute()
     {
-        bool has_image = false;
-        ++_frame_counter;
-
-        _is_lost = _kinfu->icpIsLost();
-
         if(_depth_ptr)
         {
+            _is_lost = _kinfu->icpIsLost();
+            ++_frame_counter;
+            // upload depth map
             _depth_device.upload((const void*)&_depth_ptr->data.front(), _depth_ptr->step,
                                _depth_ptr->height, _depth_ptr->width);
             if(_color_ptr)
             {
+                // if rgb data available, upload and proceed with it
                 _color_device.upload((const void*)&_color_ptr->data.front(), _color_ptr->step,
                                      _color_ptr->height, _color_ptr->width);
-                has_image = (*_kinfu)(_depth_device, _color_device);
+                (*_kinfu)(_depth_device, _color_device);
             }
             else
             {
-                has_image = (*_kinfu)(_depth_device);
+                // not rgb data, just depth
+                (*_kinfu)(_depth_device);
             }
 
+            // publish current view, will skip if _topic_view is empty
             publishView(_topic_view);
-        }
-        _depth_ptr.reset();
-        _color_ptr.reset();
+            _depth_ptr.reset();
+            _color_ptr.reset();
+        } // skip if no data
     }
 
+    /**
+     * @brief loop contains infinite loop for thread
+     */
     void loop()
     {
-        ros::Rate rate(30.0);
+        ros::Rate rate(30.0); // assume 30hz, common for openni device
         while(!ros::isShuttingDown())
         {
             execute();
@@ -71,16 +79,28 @@ private:
         }
     }
 
+    /**
+     * @brief cbDepth saves pointer to depth map from device's publisher
+     * @param msg
+     */
     void cbDepth(const sensor_msgs::ImageConstPtr &msg)
     {
         _depth_ptr = msg;
     }
 
+    /**
+     * @brief cbColor saves pointer to image from device's publisher
+     * @param msg
+     */
     void cbColor(const sensor_msgs::ImageConstPtr &msg)
     {
         _color_ptr = msg;
     }
 
+    /**
+     * @brief loadParams reads params from launch file or others, then start
+     *            subscribers and set parameters accordingly
+     */
     void loadParams()
     {
         typedef sensor_msgs::CameraInfo INFO;
@@ -106,28 +126,30 @@ private:
         _kinfu->setDepthIntrinsics(info->K.at(0), info->K.at(4), info->K.at(2), info->K.at(5));
     }
 
+    /**
+     * @brief publishView publishes current view to topic, skip if topic name is empty
+     * @param topic
+     */
     void publishView(const std::string topic)
     {
-        if(topic.empty())
+        if(!topic.empty())
         {
-            return;
+            static ros::Publisher pub = _nh.advertise<sensor_msgs::Image>(topic, 1, true);
+            // publish image, will be moved to another place
+            ns_kinfuls::KinfuTracker::View view_device;
+            std::vector<ns_kinfuls::PixelRGB> view_host;
+            int cols;
+            sensor_msgs::ImagePtr msg = sensor_msgs::ImagePtr(new sensor_msgs::Image());
+            _kinfu->getImage(view_device);
+            view_device.download(view_host, cols);
+            sensor_msgs::fillImage(*msg, "rgb8", view_device.rows(), view_device.cols(),
+                                   view_device.cols() * 3, &view_host.front());
+            pub.publish(msg);
         }
-        static ros::Publisher pub = _nh.advertise<sensor_msgs::Image>(topic, 1, true);
-        // publish image, will be moved to another place
-        ns_kinfuls::KinfuTracker::View view_device;
-        std::vector<ns_kinfuls::PixelRGB> view_host;
-        int cols;
-        sensor_msgs::ImagePtr msg = sensor_msgs::ImagePtr(new sensor_msgs::Image());
-        _kinfu->getImage(view_device);
-        view_device.download(view_host, cols);
-        sensor_msgs::fillImage(*msg, "rgb8", view_device.rows(), view_device.cols(),
-                               view_device.cols() * 3, &view_host.front());
-        pub.publish(msg);
     }
 
 public:
-    KinfuLSApp(const float volume_size, const float shift_distance, const int snapshot_rate,
-               const float width, const float height):
+    KinfuLSApp(const float volume_size, const float shift_distance, const int snapshot_rate):
         _nh(ros::NodeHandle("~")), // may replace to private etc
         _volume_size(volume_size),
         _shift_distance(shift_distance),
@@ -145,19 +167,21 @@ public:
         Eigen::Affine3f pose = Eigen::Translation3f (t) * Eigen::AngleAxisf (R);
 
         _kinfu->setInitialCameraPose(pose);
-        _kinfu->volume().setTsdfTruncDist (0.030f/*meters*/);
-        _kinfu->setIcpCorespFilteringParams (0.1f/*meters*/, sin (M_PI * 20.0 / 180.0));
+        _kinfu->volume().setTsdfTruncDist(0.030f/*meters*/);
+        _kinfu->setIcpCorespFilteringParams(0.1f/*meters*/, sin(M_PI * 20.0 / 180.0));
         //kinfu_->setDepthTruncationForICP(3.f/*meters*/);
         _kinfu->setCameraMovementThreshold(0.001f);
 
-        //Init KinFuLSApp
+        //Init KinFuLSApp, TODO use it
         _tsdf_cloud_ptr = pcl::PointCloud<pcl::PointXYZI>::Ptr(new pcl::PointCloud<pcl::PointXYZI>);
         _frame_counter = 0;
 
+        // read parameters
         loadParams();
-
+        // start thread for process
         boost::thread worker(boost::bind(&KinfuLSApp::loop, this));
     }
+
     ~KinfuLSApp()
     {
     }
@@ -167,7 +191,7 @@ int main(int argn, char **argv)
 {
     ros::init(argn, argv, "ros_kinfu_solo");
 
-    KinfuLSApp app(3.0f, 1.8f, ns_dev_kinfuls::SNAPSHOT_RATE, 640.0f, 480.0f);
+    KinfuLSApp app(3.0f, 1.8f, ns_dev_kinfuls::SNAPSHOT_RATE);
 
     ros::spin();
     return 0;
