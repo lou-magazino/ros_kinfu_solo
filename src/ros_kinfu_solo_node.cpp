@@ -11,6 +11,8 @@
 
 // from local source code
 #include <pcl/gpu/kinfu_large_scale/kinfu.h>
+#include <pcl/gpu/kinfu_large_scale/impl/standalone_marching_cubes.hpp>
+#include <pcl/gpu/kinfu_large_scale/marching_cubes.h>
 
 namespace ns_kinfuls = pcl::gpu::kinfuLS;
 namespace ns_dev_kinfuls = pcl::device::kinfuLS;
@@ -28,7 +30,6 @@ private:
     ns_kinfuls::KinfuTracker::View _color_device;
     sensor_msgs::ImageConstPtr _depth_ptr;
     sensor_msgs::ImageConstPtr _color_ptr;
-    pcl::PointCloud<pcl::PointXYZI>::Ptr _tsdf_cloud_ptr;
 
     ros::Subscriber _sub_depth;
     ros::Subscriber _sub_color;
@@ -40,7 +41,6 @@ private:
      */
     void execute()
     {
-        ROS_INFO("execute");;
         if(_depth_ptr)
         {
             // save local pointers to make sure they are "sync"
@@ -69,6 +69,7 @@ private:
 
             // publish current view, will skip if _topic_view is empty
             publishView(_topic_view);
+            saveToMesh();
         } // skip if no data
     }
 
@@ -81,7 +82,7 @@ private:
         while(!ros::isShuttingDown())
         {
             execute();
-//            rate.sleep();
+            rate.sleep();
             boost::this_thread::interruption_point();
         }
     }
@@ -155,6 +156,31 @@ private:
         }
     }
 
+    /**
+     * @brief saveToMesh downloads tsdf, store to mesh(this part is currently part of pcl, may rewrite)
+     */
+    void saveToMesh()
+    {
+        _kinfu->extractAndSaveWorld();
+
+//        // needed:
+//        // pcl::PointCloud<pcl::PointXYZI>::Ptr KinfuTracker::getWorld();
+//        // generally same as extractAndSaveWorld, but returns cyclical_.getWorldModel ()->getWorld ()
+//        std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> clouds;
+//        std::vector<Eigen::Vector3f, Eigen::aligned_allocator<Eigen::Vector3f> > transforms;
+//        pcl::kinfuLS::WorldModel<pcl::PointXYZI> world;
+//        //Adding current cloud to the world model
+//        world.addSlice (_kinfu->getWorld());
+//        //Get world as a vector of cubes
+//        world.getWorldAsCubes (ns_dev_kinfuls::VOLUME_X, clouds, transforms, 0.025); // 2.5% overlapp (12 cells with a 512-wide cube)
+
+//        pcl::gpu::kinfuLS::StandaloneMarchingCubes<pcl::PointXYZI> cubes(ns_dev_kinfuls::VOLUME_X,
+//                                                                         ns_dev_kinfuls::VOLUME_Y,
+//                                                                         ns_dev_kinfuls::VOLUME_Z,
+//                                                                         _volume_size);
+//        cubes.getMeshesFromTSDFVector(clouds, transforms); // ply file saved to ./ros/mesh*.ply, return to somewhere
+    }
+
 public:
     KinfuLSApp(const float volume_size, const float shift_distance, const int snapshot_rate):
         _nh(ros::NodeHandle("~")), // may replace to private etc
@@ -163,7 +189,7 @@ public:
         _snapshot_rate(snapshot_rate),
         _is_lost(false),
         _kinfu(new ns_kinfuls::KinfuTracker(Eigen::Vector3f::Constant(_volume_size),
-                                            _shift_distance)),
+                                            _shift_distance)), // TODO set height width from topic camera_info
         _topic_view("")
     {
         // modified from or directly from kinfuLS_app.cpp, pcl 1.8
@@ -179,8 +205,6 @@ public:
         //kinfu_->setDepthTruncationForICP(3.f/*meters*/);
         _kinfu->setCameraMovementThreshold(0.001f);
 
-        //Init KinFuLSApp, TODO use it
-        _tsdf_cloud_ptr = pcl::PointCloud<pcl::PointXYZI>::Ptr(new pcl::PointCloud<pcl::PointXYZI>);
         _frame_counter = 0;
 
         // read parameters
@@ -217,7 +241,7 @@ int main(int argn, char **argv)
 {
     ros::init(argn, argv, "ros_kinfu_solo");
 
-    KinfuLSApp app(3.0f, 1.8f, ns_dev_kinfuls::SNAPSHOT_RATE);
+    KinfuLSApp app(3.0f, 1.5f, ns_dev_kinfuls::SNAPSHOT_RATE);
 
     ros::spin();
     return 0;
