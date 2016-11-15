@@ -33,24 +33,32 @@ private:
     ros::Subscriber _sub_depth;
     ros::Subscriber _sub_color;
     std::string _topic_view; // empty if disable
+    boost::thread _thread_kinfu;
 
     /**
      * @brief execute real part of processing
      */
     void execute()
     {
+        ROS_INFO("execute");;
         if(_depth_ptr)
         {
+            // save local pointers to make sure they are "sync"
+            sensor_msgs::ImageConstPtr depth_ptr(_depth_ptr);
+            sensor_msgs::ImageConstPtr color_ptr(_color_ptr);
+            _depth_ptr.reset();
+            _color_ptr.reset();
+
             _is_lost = _kinfu->icpIsLost();
             ++_frame_counter;
             // upload depth map
-            _depth_device.upload((const void*)&_depth_ptr->data.front(), _depth_ptr->step,
-                               _depth_ptr->height, _depth_ptr->width);
-            if(_color_ptr)
+            _depth_device.upload((const void*)&depth_ptr->data.front(), depth_ptr->step,
+                                 depth_ptr->height, depth_ptr->width);
+            if(color_ptr)
             {
                 // if rgb data available, upload and proceed with it
-                _color_device.upload((const void*)&_color_ptr->data.front(), _color_ptr->step,
-                                     _color_ptr->height, _color_ptr->width);
+                _color_device.upload((const void*)&color_ptr->data.front(), color_ptr->step,
+                                     color_ptr->height, color_ptr->width);
                 (*_kinfu)(_depth_device, _color_device);
             }
             else
@@ -61,8 +69,6 @@ private:
 
             // publish current view, will skip if _topic_view is empty
             publishView(_topic_view);
-            _depth_ptr.reset();
-            _color_ptr.reset();
         } // skip if no data
     }
 
@@ -75,7 +81,8 @@ private:
         while(!ros::isShuttingDown())
         {
             execute();
-            rate.sleep();
+//            rate.sleep();
+            boost::this_thread::interruption_point();
         }
     }
 
@@ -121,8 +128,8 @@ private:
             ros::shutdown();
         }
         // should be safe, apply
-        _sub_depth = _nh.subscribe<sensor_msgs::Image>(topic_depth, 1, &KinfuLSApp::cbDepth, this);
-        _sub_color = _nh.subscribe<sensor_msgs::Image>(topic_color, 1, &KinfuLSApp::cbColor, this);
+        _sub_depth = _nh.subscribe<sensor_msgs::Image>(topic_depth, 10, &KinfuLSApp::cbDepth, this);
+        _sub_color = _nh.subscribe<sensor_msgs::Image>(topic_color, 10, &KinfuLSApp::cbColor, this);
         _kinfu->setDepthIntrinsics(info->K.at(0), info->K.at(4), info->K.at(2), info->K.at(5));
     }
 
@@ -179,11 +186,30 @@ public:
         // read parameters
         loadParams();
         // start thread for process
-        boost::thread worker(boost::bind(&KinfuLSApp::loop, this));
+        startThread();
     }
 
     ~KinfuLSApp()
     {
+    }
+
+    /**
+     * @brief stopThread
+     */
+    void stopThread()
+    {
+        // interrupt and joinm interrupt point is after execution step, so should be okay
+        _thread_kinfu.interrupt();
+        _thread_kinfu.join();
+    }
+
+    /**
+     * @brief startThread
+     */
+    void startThread()
+    {
+        // restart by making a new thread
+        _thread_kinfu = boost::thread(boost::bind(&KinfuLSApp::loop, this));
     }
 };
 
