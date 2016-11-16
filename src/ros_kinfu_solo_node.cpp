@@ -35,6 +35,7 @@ private:
     ros::Subscriber _sub_color;
     std::string _topic_view; // empty if disable
     boost::thread _thread_kinfu;
+    boost::thread _thread_save_mesh;
 
     /**
      * @brief execute real part of processing
@@ -69,14 +70,14 @@ private:
 
             // publish current view, will skip if _topic_view is empty
             publishView(_topic_view);
-            saveToMesh();
+//            saveToMesh();
         } // skip if no data
     }
 
     /**
-     * @brief loop contains infinite loop for thread
+     * @brief executeLoop contains infinite loop for execute
      */
-    void loop()
+    void executeLoop()
     {
         ros::Rate rate(30.0); // assume 30hz, common for openni device
         while(!ros::isShuttingDown())
@@ -161,24 +162,44 @@ private:
      */
     void saveToMesh()
     {
-        _kinfu->extractAndSaveWorld();
+//        _kinfu->extractAndSaveWorld();
 
-//        // needed:
-//        // pcl::PointCloud<pcl::PointXYZI>::Ptr KinfuTracker::getWorld();
-//        // generally same as extractAndSaveWorld, but returns cyclical_.getWorldModel ()->getWorld ()
-//        std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> clouds;
-//        std::vector<Eigen::Vector3f, Eigen::aligned_allocator<Eigen::Vector3f> > transforms;
-//        pcl::kinfuLS::WorldModel<pcl::PointXYZI> world;
-//        //Adding current cloud to the world model
-//        world.addSlice (_kinfu->getWorld());
-//        //Get world as a vector of cubes
-//        world.getWorldAsCubes (ns_dev_kinfuls::VOLUME_X, clouds, transforms, 0.025); // 2.5% overlapp (12 cells with a 512-wide cube)
+        // todo for this part:
+        // pcl::PointCloud<pcl::PointXYZI>::Ptr KinfuTracker::getWorld();
+        // generally same as extractAndSaveWorld, but returns cyclical_.getWorldModel ()->getWorld ()
+        pcl::PointCloud<pcl::PointXYZI>::Ptr cloud_world = _kinfu->getWorld();
+        if(!cloud_world->empty())
+        {
+            std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> clouds;
+            std::vector<Eigen::Vector3f, Eigen::aligned_allocator<Eigen::Vector3f> > transforms;
+            pcl::kinfuLS::WorldModel<pcl::PointXYZI> world;
+            //Adding current cloud to the world model
+            world.addSlice(cloud_world);
+            //Get world as a vector of cubes
+            world.getWorldAsCubes (ns_dev_kinfuls::VOLUME_X, clouds, transforms, 0.025); // 2.5% overlapp (12 cells with a 512-wide cube)
 
-//        pcl::gpu::kinfuLS::StandaloneMarchingCubes<pcl::PointXYZI> cubes(ns_dev_kinfuls::VOLUME_X,
-//                                                                         ns_dev_kinfuls::VOLUME_Y,
-//                                                                         ns_dev_kinfuls::VOLUME_Z,
-//                                                                         _volume_size);
-//        cubes.getMeshesFromTSDFVector(clouds, transforms); // ply file saved to ./ros/mesh*.ply, return to somewhere
+            pcl::gpu::kinfuLS::StandaloneMarchingCubes<pcl::PointXYZI> cubes(ns_dev_kinfuls::VOLUME_X,
+                                                                             ns_dev_kinfuls::VOLUME_Y,
+                                                                             ns_dev_kinfuls::VOLUME_Z,
+                                                                             _volume_size);
+            cubes.getMeshesFromTSDFVector(clouds, transforms); // ply file saved to ./ros/mesh*.ply, return to somewhere
+        }
+        else
+        {
+            ROS_ERROR("no cloud available");
+        }
+    }
+
+    void saveToMeshLoop()
+    {
+        ros::Rate r(2.0 / 60.0); // save twice per minute
+        while(ros::ok())
+        {
+            ROS_INFO("save once");
+            r.sleep();
+            saveToMesh();
+            boost::this_thread::interruption_point();
+        }
     }
 
 public:
@@ -225,6 +246,8 @@ public:
         // interrupt and joinm interrupt point is after execution step, so should be okay
         _thread_kinfu.interrupt();
         _thread_kinfu.join();
+        _thread_save_mesh.interrupt();
+        _thread_save_mesh.join();
     }
 
     /**
@@ -233,7 +256,8 @@ public:
     void startThread()
     {
         // restart by making a new thread
-        _thread_kinfu = boost::thread(boost::bind(&KinfuLSApp::loop, this));
+        _thread_kinfu = boost::thread(boost::bind(&KinfuLSApp::executeLoop, this));
+        _thread_save_mesh = boost::thread(boost::bind(&KinfuLSApp::saveToMeshLoop, this));
     }
 };
 
