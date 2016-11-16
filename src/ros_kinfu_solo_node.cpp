@@ -1,6 +1,7 @@
 #include <iostream>
 #include <vector>
 #include <string>
+#include <csignal>
 #include <boost/shared_ptr.hpp>
 #include <boost/thread.hpp>
 
@@ -8,6 +9,7 @@
 #include <sensor_msgs/Image.h>
 #include <sensor_msgs/CameraInfo.h>
 #include <sensor_msgs/fill_image.h>
+#include <ros/xmlrpc_manager.h>
 
 // from local source code
 #include <pcl/gpu/kinfu_large_scale/kinfu.h>
@@ -16,6 +18,8 @@
 
 namespace ns_kinfuls = pcl::gpu::kinfuLS;
 namespace ns_dev_kinfuls = pcl::device::kinfuLS;
+
+sig_atomic_t volatile g_request_shutdown = 0; // for saving mesh at the end of program
 
 class KinfuLSApp
 {
@@ -80,7 +84,7 @@ private:
     void executeLoop()
     {
         ros::Rate rate(30.0); // assume 30hz, common for openni device
-        while(!ros::isShuttingDown())
+        while(ros::ok() && !g_request_shutdown)
         {
             execute();
             rate.sleep();
@@ -131,7 +135,7 @@ private:
         }
         // should be safe, apply
         _sub_depth = _nh.subscribe<sensor_msgs::Image>(topic_depth, 10, &KinfuLSApp::cbDepth, this);
-        _sub_color = _nh.subscribe<sensor_msgs::Image>(topic_color, 10, &KinfuLSApp::cbColor, this);
+//        _sub_color = _nh.subscribe<sensor_msgs::Image>(topic_color, 10, &KinfuLSApp::cbColor, this);
         _kinfu->setDepthIntrinsics(info->K.at(0), info->K.at(4), info->K.at(2), info->K.at(5));
     }
 
@@ -167,6 +171,7 @@ private:
         // todo for this part:
         // pcl::PointCloud<pcl::PointXYZI>::Ptr KinfuTracker::getWorld();
         // generally same as extractAndSaveWorld, but returns cyclical_.getWorldModel ()->getWorld ()
+        ROS_WARN("saving");
         pcl::PointCloud<pcl::PointXYZI>::Ptr cloud_world = _kinfu->getWorld();
         if(!cloud_world->empty())
         {
@@ -192,14 +197,13 @@ private:
 
     void saveToMeshLoop()
     {
-        ros::Rate r(2.0 / 60.0); // save twice per minute
-        while(ros::ok())
+        ros::Rate r(1.0); // per second
+        while(ros::ok() && !g_request_shutdown)
         {
-            ROS_INFO("save once");
             r.sleep();
-            saveToMesh();
             boost::this_thread::interruption_point();
         }
+        saveToMesh(); // save when not shutdown, if ros is not okay, this would not be called
     }
 
 public:
@@ -261,11 +265,42 @@ public:
     }
 };
 
+void sig_int_handler_shutdown(int sig)
+{
+    ROS_INFO("Shutdown request");
+    g_request_shutdown = 1;
+}
+
+// http://answers.ros.org/question/27655/what-is-the-correct-way-to-do-stuff-before-a-node-is-shutdown/
+void callback_shutdown(XmlRpc::XmlRpcValue& params, XmlRpc::XmlRpcValue& result)
+{
+    ROS_INFO("Shutdown request");
+    int num_params = 0;
+    if (params.getType() == XmlRpc::XmlRpcValue::TypeArray)
+    {
+        num_params = params.size();
+    }
+    if (num_params > 1)
+    {
+        std::string reason = params[1];
+        ROS_WARN("Shutdown request received. Reason: [%s]", reason.c_str());
+        g_request_shutdown = 1; // Set flag
+    }
+
+    result = ros::xmlrpc::responseInt(1, "", 0);
+}
+
 int main(int argn, char **argv)
 {
-    ros::init(argn, argv, "ros_kinfu_solo");
+    ros::init(argn, argv, "ros_kinfu_solo", ros::init_options::NoSigintHandler);
 
     KinfuLSApp app(3.0f, 1.5f, ns_dev_kinfuls::SNAPSHOT_RATE);
+
+    signal(SIGINT, sig_int_handler_shutdown);
+
+    // Override XMLRPC shutdown
+    ros::XMLRPCManager::instance()->unbind("shutdown");
+    ros::XMLRPCManager::instance()->bind("shutdown", callback_shutdown);
 
     ros::spin();
     return 0;
