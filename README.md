@@ -3,7 +3,8 @@ a minimal package for running kinfu-large-scale on data from ros topics
 
 installation:
 
-1, git clone pcl with gpu module(1.8 for example, 1.7 doesn't have it)
+1, git clone pcl with gpu module(1.8 for example, 1.7 doesn't have it. my forked pcl is suggested, with some 
+   modification to download data from kinfu)
 
 2, set PCL_GPU_DIR to the path to pcl/gpu. default path is $HOME/workspace/pcl/gpu
 
