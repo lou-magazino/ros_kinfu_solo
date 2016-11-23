@@ -25,7 +25,7 @@ class KinfuLSApp
 {
 private:
     ros::NodeHandle _nh;
-    float _width, _height;
+    int _width, _height;
     float _volume_size, _shift_distance;
     int _frame_counter, _snapshot_rate;
     bool _is_lost;
@@ -111,15 +111,15 @@ private:
     }
 
     /**
-     * @brief loadParams reads params from launch file or others, then start
+     * @brief init reads params from launch file or others, then start
      *            subscribers and set parameters accordingly
      */
-    void loadParams()
+    void init()
     {
         typedef sensor_msgs::CameraInfo INFO;
         // directly available parameters
-        _height = (float)_nh.param<double>("height", -1.0);
-        _width = (float)_nh.param<double>("width", -1.0);
+        _height = _nh.param<int>("height", -1);
+        _width = _nh.param<int>("width", -1);
         // topics
         std::string topic_depth, topic_color, topic_info;
         topic_depth = _nh.param<std::string>("topic_depth", "");
@@ -128,11 +128,28 @@ private:
         INFO::ConstPtr info = ros::topic::waitForMessage<INFO>(topic_info, _nh, ros::Duration(2));
         _topic_view = _nh.param<std::string>("topic_view", "");
         if(topic_depth.empty() || topic_color.empty() || topic_info.empty()
-                || _height < 0.0f || _width < 0.0f || !info)
+                || _height < 0 || _width < 0 || !info)
         {
             ROS_ERROR("parameter error");
             ros::shutdown();
         }
+        
+        // init and configure kinfu here
+        // modified from or directly from kinfuLS_app.cpp, pcl 1.8
+        Eigen::Matrix3f R = Eigen::Matrix3f::Identity ();   // * AngleAxisf( pcl::deg2rad(-30.f), Vector3f::UnitX());
+        Eigen::Vector3f t = Eigen::Vector3f::Constant(_volume_size) * 0.5f
+                - Eigen::Vector3f (0, 0, _volume_size / 2 * 1.2f);
+
+        Eigen::Affine3f pose = Eigen::Translation3f (t) * Eigen::AngleAxisf (R);
+        _kinfu = boost::make_shared<ns_kinfuls::KinfuTracker>(
+	    ns_kinfuls::KinfuTracker(Eigen::Vector3f::Constant(_volume_size), _shift_distance, _height, _width));
+
+        _kinfu->setInitialCameraPose(pose);
+        _kinfu->volume().setTsdfTruncDist(0.030f/*meters*/);
+        _kinfu->setIcpCorespFilteringParams(0.1f/*meters*/, sin(M_PI * 20.0 / 180.0));
+        //kinfu_->setDepthTruncationForICP(3.f/*meters*/);
+        _kinfu->setCameraMovementThreshold(0.001f);
+	
         // should be safe, apply
         _sub_depth = _nh.subscribe<sensor_msgs::Image>(topic_depth, 10, &KinfuLSApp::cbDepth, this);
 //        _sub_color = _nh.subscribe<sensor_msgs::Image>(topic_color, 10, &KinfuLSApp::cbColor, this);
@@ -213,27 +230,11 @@ public:
         _shift_distance(shift_distance),
         _snapshot_rate(snapshot_rate),
         _is_lost(false),
-        _kinfu(new ns_kinfuls::KinfuTracker(Eigen::Vector3f::Constant(_volume_size),
-                                            _shift_distance)), // TODO set height width from topic camera_info
         _topic_view("")
     {
-        // modified from or directly from kinfuLS_app.cpp, pcl 1.8
-        Eigen::Matrix3f R = Eigen::Matrix3f::Identity ();   // * AngleAxisf( pcl::deg2rad(-30.f), Vector3f::UnitX());
-        Eigen::Vector3f t = Eigen::Vector3f::Constant(_volume_size) * 0.5f
-                - Eigen::Vector3f (0, 0, _volume_size / 2 * 1.2f);
-
-        Eigen::Affine3f pose = Eigen::Translation3f (t) * Eigen::AngleAxisf (R);
-
-        _kinfu->setInitialCameraPose(pose);
-        _kinfu->volume().setTsdfTruncDist(0.030f/*meters*/);
-        _kinfu->setIcpCorespFilteringParams(0.1f/*meters*/, sin(M_PI * 20.0 / 180.0));
-        //kinfu_->setDepthTruncationForICP(3.f/*meters*/);
-        _kinfu->setCameraMovementThreshold(0.001f);
-
         _frame_counter = 0;
-
         // read parameters
-        loadParams();
+        init();
         // start thread for process
         startThread();
     }
