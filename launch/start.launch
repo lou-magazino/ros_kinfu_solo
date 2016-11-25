@@ -1,15 +1,22 @@
 <launch>
   <arg name="namespace" default="/camera" />
   <arg name="name" default="ros_kinfu_solo" />
+  
+  <arg name="topic_camera_info" default="/depth/camera_info" />
+  <arg name="topic_depth" default="/depth/image_rect_raw" />
+  <arg name="topic_image" default="/rgb/image_rect_color" />
+  <arg name="topic_view" default="kinfued_scene" />
+  <arg name="height" default="480" />
+  <arg name="width" default="640" />
 
   <node pkg="ros_kinfu_solo" type="ros_kinfu_solo_node" name="$(arg name)" output="screen">
     <param name="prefix_topic" value="$(arg namespace)" />
-    <param name="topic_camera_info" value="$(arg namespace)/depth/camera_info" />
-    <param name="topic_depth" value="$(arg namespace)/depth/image_rect_raw" />
-    <param name="topic_image" value="$(arg namespace)/rgb/image_rect_color" />
-    <param name="topic_view" value="$(arg namespace)/kinfued_scene" />
+    <param name="topic_camera_info" value="$(arg namespace)$(arg topic_camera_info)" />
+    <param name="topic_depth" value="$(arg namespace)$(arg topic_depth)" />
+    <param name="topic_image" value="$(arg namespace)$(arg topic_image)" />
+    <param name="topic_view" value="$(arg namespace)$(arg topic_view)" />
 
-    <param name="height" type="int" value="480" />
-    <param name="width" type="int" value="640" />
+    <param name="height" type="int" value="$(arg height)" />
+    <param name="width" type="int" value="$(arg width)" />
   </node>
 </launch>
